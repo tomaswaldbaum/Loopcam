@@ -19,7 +19,10 @@ android {
             }
         }
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            // -Ploopcam.abis=arm64-v8a limita la compilación nativa (el CI lo usa para una APK más liviana).
+            val abis = (findProperty("loopcam.abis") as String?)?.split(",")
+                ?: listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += abis
         }
     }
 

@@ -8,11 +8,14 @@ import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.loopcam.app.R
 import io.loopcam.app.session.SessionController
-import io.loopcam.core.audio.LoopConfig
+import io.loopcam.app.session.SessionState
+import io.loopcam.app.settings.SessionSettingsRepository
 import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 /** Mantiene viva la sesión aunque la app pase a segundo plano o se apague la pantalla. */
 @AndroidEntryPoint
@@ -20,26 +23,35 @@ class RecordingService : LifecycleService() {
 
     @Inject lateinit var sessionController: SessionController
 
+    @Inject lateinit var settingsRepository: SessionSettingsRepository
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_START -> {
                 goForeground()
-                val seconds = intent.getDoubleExtra(EXTRA_LOOP_SECONDS, DEFAULT_LOOP_SECONDS)
-                sessionController.start(LoopConfig(seconds))
+                lifecycleScope.launch {
+                    sessionController.start(settingsRepository.current().config)
+                    if (sessionController.state.value is SessionState.Error) stopSelfAndNotification()
+                }
             }
-            ACTION_STOP -> {
+            ACTION_STOP -> lifecycleScope.launch {
                 sessionController.stop()
-                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelfAndNotification()
             }
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        sessionController.stop()
+        // Si el sistema mata el servicio a mitad de sesión, cerrar los archivos igual.
+        sessionController.stopAsync("El sistema detuvo el servicio")
         super.onDestroy()
+    }
+
+    private fun stopSelfAndNotification() {
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun goForeground() {
@@ -64,15 +76,11 @@ class RecordingService : LifecycleService() {
     companion object {
         private const val ACTION_START = "io.loopcam.action.START"
         private const val ACTION_STOP = "io.loopcam.action.STOP"
-        private const val EXTRA_LOOP_SECONDS = "loop_seconds"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
-        const val DEFAULT_LOOP_SECONDS = 4.0
-
-        fun start(context: Context, loopSeconds: Double) {
-            val intent = Intent(context, RecordingService::class.java)
-                .setAction(ACTION_START)
-                .putExtra(EXTRA_LOOP_SECONDS, loopSeconds)
+        /** Arranca una sesión con la configuración guardada en [SessionSettingsRepository]. */
+        fun start(context: Context) {
+            val intent = Intent(context, RecordingService::class.java).setAction(ACTION_START)
             context.startForegroundService(intent)
         }
 

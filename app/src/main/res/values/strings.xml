@@ -3,10 +3,57 @@
     <string name="permissions_title">Permisos necesarios</string>
     <string name="permissions_body">LoopCam necesita la cámara y el micrófono para grabar video y loops de audio.</string>
     <string name="permissions_grant">Dar permisos</string>
-    <string name="loop_length">Loop: %1$.1f s</string>
     <string name="record">Grabar</string>
     <string name="stop">Detener</string>
-    <string name="headphones_hint">Usá auriculares con cable para evitar que el micrófono grabe el loop.</string>
+    <string name="cancel">Cancelar</string>
+    <string name="headphones_hint">Usá auriculares: el metrónomo y el loop se escuchan pero no se graban.</string>
+    <string name="speaker_metronome_warning">Sin auriculares, el micrófono va a grabar el metrónomo que sale por el parlante.</string>
     <string name="notification_channel">Grabación</string>
     <string name="notification_recording">Grabando sesión…</string>
+
+    <!-- Estado de la sesión -->
+    <string name="starting">Midiendo latencia…</string>
+    <string name="get_ready">Preparate</string>
+    <string name="loop_number">Vuelta %1$d</string>
+    <string name="layers">Capa %1$d / %2$d</string>
+    <string name="layers_full">Capas completas: deshacé una para seguir grabando</string>
+    <string name="layer_recording">● grabando</string>
+    <string name="layer_playing">▶ reproduciendo</string>
+    <string name="latency">Latencia %1$.0f ms</string>
+    <string name="dropped_frames">Se perdieron %1$d samples al escribir el audio</string>
+    <string name="overdub">Overdub</string>
+    <string name="metronome">Metrónomo</string>
+    <string name="undo">Deshacer capa</string>
+    <string name="session_saved">Sesión guardada (%1$d capas): %2$s</string>
+    <string name="session_offset_unknown">No se pudo medir el offset de sincronía de audio.</string>
+    <string name="session_offset_approximate">El inicio del video es aproximado (no hubo timestamp de sensor).</string>
+    <string name="exporting">Exportando video… %1$d%%</string>
+    <string name="exported">Guardado en la galería (Movies/LoopCam)</string>
+    <string name="export_failed">No se pudo exportar: %1$s</string>
+    <string name="open_video">Ver</string>
+
+    <!-- Ajustes -->
+    <string name="settings">Ajustes</string>
+    <string name="settings_summary">%1$d tiempos · %2$.0f BPM · %3$.1f s · cuenta %4$d · máx. %5$d capas</string>
+    <string name="loop_length">Largo del loop</string>
+    <string name="mode_tempo">BPM</string>
+    <string name="mode_seconds">Segundos</string>
+    <string name="bpm_value">%1$.0f BPM</string>
+    <string name="seconds_value">%1$.1f s</string>
+    <string name="time_signature">Compás</string>
+    <string name="bars">Compases por loop</string>
+    <string name="derived_length">%1$d tiempos · %2$.1f BPM · %3$.2f s</string>
+    <string name="loop_too_long">El loop tiene que durar entre %1$.1f y %2$.0f s.</string>
+    <string name="count_in">Cuenta regresiva</string>
+    <string name="count_in_none">Sin cuenta</string>
+    <string name="count_in_one">1 compás</string>
+    <string name="count_in_two">2 compases</string>
+    <string name="metronome_in_count_in">Metrónomo en la cuenta regresiva</string>
+    <string name="metronome_while_recording">Metrónomo mientras grabo</string>
+    <string name="max_layers">Capas máximas: %1$d</string>
+    <string name="max_layers_memory">Con este largo de loop entran hasta %1$d capas.</string>
+    <string name="camera">Cámara</string>
+    <string name="camera_back">Trasera</string>
+    <string name="camera_front">Frontal</string>
+    <string name="switch_camera">Cambiar cámara</string>
 </resources>

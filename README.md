@@ -15,6 +15,34 @@ core/export/    Une video + mezcla de audio en un MP4 (Media3 Transformer)
 - Video y audio registran su inicio con el mismo reloj (`CLOCK_MONOTONIC` / `System.nanoTime()`), y el export los alinea con esa diferencia.
 - El callback de audio es de tiempo real: sin locks, sin allocations y sin I/O.
 
+### Motor de loops (`core/audio/src/main/cpp`)
+
+```
+Oboe FullDuplexStream (mic + auriculares, LowLatency/Exclusive, float mono)
+   └─ onBothStreamsReady ──► LoopCore.process(in, out, fileOut)
+                               ├─ out: suma de capas terminadas (+ click al inicio de la vuelta)
+                               ├─ capa en grabación[pos - latencia] = input
+                               └─ fileOut: lo que se escuchaba + input en vivo (tiempo de input)
+                            ──► SpscRingBuffer (lock-free) ──► hilo AudioFileWriter ──► mix.wav (PCM 16-bit)
+```
+
+- **Largo del loop:** en BPM (compás × compases) o en segundos; siempre se divide en tiempos enteros, así el metrónomo no se corre.
+- **Cuenta regresiva:** 0, 1 o 2 compases en los que solo suena el metrónomo; no se graba audio. La cámara arranca ~500 ms antes del final de la cuenta y el video exportado empieza con el loop.
+- **Metrónomo:** click en cada tiempo, con acento en el primero del compás. Se activa por separado para la cuenta y para la grabación. Sale solo por la salida de audio (auriculares) y nunca se escribe en el archivo.
+- **Capas:** cada vuelta completa con *overdub* activo cierra una capa, que empieza a sonar en la vuelta siguiente. El máximo se configura entre 1 y 24 (limitado por memoria en loops largos); al llegar, se deja de grabar hasta deshacer una.
+- **Compensación de latencia:** al arrancar, los streams corren 300 ms "desarmados" y después se mide la latencia de ida y vuelta (`calculateLatencyMillis` de entrada + salida). El input se escribe en `pos - latencia`.
+- **Deshacer:** descarta la última capa terminada y la que se está grabando; la grabación sigue desde la vuelta siguiente.
+### Sincronía y export
+
+1. **Audio:** `fileStartNanos` es el instante de captura del primer sample del WAV (`getTimestamp` del input de AAudio, CLOCK_MONOTONIC).
+2. **Video:** con `Camera2Interop` se lee el `SENSOR_TIMESTAMP` del primer frame posterior al evento `Start` de CameraX. `SensorClock` lo pasa a CLOCK_MONOTONIC, porque algunos sensores usan BOOTTIME. Si no llega, se usa la hora del evento y la UI avisa que la sincronía es aproximada.
+3. **Offset:** `audioOffsetNanos = fileStartNanos - videoStartNanos`.
+4. **Alineación:** al detener, se espera a que CameraX finalice el MP4. Después `WavAligner` agrega silencio al principio o recorta el WAV según el offset, y lo ajusta a la duración exacta del video.
+5. **Export:** Media3 Transformer arma una `Composition` con dos secuencias: el video, que se copia sin recodificar (`setTransmuxVideo`), y la mezcla alineada, que se codifica a AAC.
+6. **Galería:** `GallerySaver` copia el resultado a `Movies/LoopCam` vía MediaStore, sin pedir permisos, y la UI ofrece abrirlo.
+
+Cada sesión queda en `Android/data/io.loopcam.app/files/Movies/sessions/<timestamp>/`, con `video.mp4`, `mix.wav`, `loopcam.mp4` (el resultado) y `session.properties`.
+
 ## Requisitos
 
 - Android Studio (última versión estable), con el JDK embebido.
@@ -28,7 +56,11 @@ core/export/    Une video + mezcla de audio en un MP4 (Media3 Transformer)
 ./gradlew assembleDebug          # compila
 ./gradlew testDebugUnitTest      # tests unitarios
 ./gradlew installDebug           # instala en el teléfono conectado
-adb logcat -s LoopEngine         # ver qué stream abrió Oboe (AAudio/LowLatency/Exclusive)
+adb logcat -s LoopEngine         # ver qué stream abrió Oboe (AAudio/LowLatency/Exclusive) y la latencia medida
+
+# Tests nativos del motor (en la PC, sin Android)
+cmake -S core/audio/src/test/cpp -B build/native-tests
+cmake --build build/native-tests && ctest --test-dir build/native-tests --output-on-failure
 ```
 
 ## Estado
@@ -36,6 +68,10 @@ adb logcat -s LoopEngine         # ver qué stream abrió Oboe (AAudio/LowLatenc
 - [x] Esqueleto multi-módulo, version catalog, Hilt, Compose, permisos, servicio en primer plano
 - [x] Stream Oboe de baja latencia (silencio) para validar el camino nativo
 - [x] Preview y grabación de video sin audio con CameraX
-- [ ] Motor full-duplex: capas, overdub, compensación de latencia, WAV en streaming
-- [ ] Sincronía por timestamps reales (primer frame de video / frame 0 de AAudio)
-- [ ] Export con Media3 Transformer → MediaStore
+- [x] Motor full-duplex: capas, overdub, deshacer, click, compensación de latencia, WAV en streaming
+- [x] Timestamp real del inicio del audio (AAudio `getTimestamp`)
+- [x] Timestamp de sensor del primer frame de video y offset de sincronía
+- [x] Export con Media3 Transformer → galería (MediaStore)
+- [x] Cuenta regresiva, metrónomo por BPM, capas máximas configurables, cámara frontal/trasera, indicadores en pantalla, ajustes persistentes
+- [ ] Grabar con la pantalla apagada (ligar la cámara al servicio)
+- [ ] Calibración manual de latencia y de sincronía desde la UI
