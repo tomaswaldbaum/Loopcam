@@ -7,6 +7,17 @@
     <string name="record">Grabar</string>
     <string name="stop">Detener</string>
     <string name="headphones_hint">Usá auriculares con cable para evitar que el micrófono grabe el loop.</string>
+    <string name="starting">Midiendo latencia…</string>
+    <string name="layers">Capas: %1$d / %2$d</string>
+    <string name="layer_recording">● grabando capa</string>
+    <string name="layer_playing">▶ reproduciendo</string>
+    <string name="latency">Latencia: %1$.1f ms</string>
+    <string name="dropped_frames">Se perdieron %1$d samples al escribir el audio</string>
+    <string name="overdub">Overdub</string>
+    <string name="click">Click</string>
+    <string name="undo">Deshacer capa</string>
+    <string name="session_saved">Sesión guardada (%1$d capas): %2$s</string>
+    <string name="session_offset_unknown">No se pudo medir el offset de sincronía de audio.</string>
     <string name="notification_channel">Grabación</string>
     <string name="notification_recording">Grabando sesión…</string>
 </resources>

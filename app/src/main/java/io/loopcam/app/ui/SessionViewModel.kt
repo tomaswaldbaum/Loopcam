@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.loopcam.app.service.RecordingService
 import io.loopcam.app.session.SessionController
 import io.loopcam.app.session.SessionState
+import io.loopcam.core.audio.AudioStatus
 import io.loopcam.core.audio.LoopConfig
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,9 @@ class SessionViewModel @Inject constructor(
 ) : AndroidViewModel(application) {
 
     val sessionState: StateFlow<SessionState> = sessionController.state
+    val audioStatus: StateFlow<AudioStatus?> = sessionController.audioStatus
+    val overdub: StateFlow<Boolean> = sessionController.overdub
+    val click: StateFlow<Boolean> = sessionController.click
 
     private val _loopSeconds = MutableStateFlow(RecordingService.DEFAULT_LOOP_SECONDS)
     val loopSeconds: StateFlow<Double> = _loopSeconds.asStateFlow()
@@ -30,6 +34,12 @@ class SessionViewModel @Inject constructor(
     fun setLoopSeconds(seconds: Double) {
         _loopSeconds.value = seconds.coerceIn(LoopConfig.MIN_LOOP_SECONDS, LoopConfig.MAX_LOOP_SECONDS)
     }
+
+    fun setOverdub(enabled: Boolean) = sessionController.setOverdub(enabled)
+
+    fun setClickEnabled(enabled: Boolean) = sessionController.setClickEnabled(enabled)
+
+    fun undoLastLayer() = sessionController.undoLastLayer()
 
     // TODO(video): para grabar con la pantalla apagada, ligar la cámara al ciclo de vida del servicio.
     fun bindCamera(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
@@ -40,10 +50,10 @@ class SessionViewModel @Inject constructor(
 
     fun toggleRecording() {
         val context = getApplication<Application>()
-        if (sessionState.value is SessionState.Recording) {
-            RecordingService.stop(context)
-        } else {
-            RecordingService.start(context, _loopSeconds.value)
+        when (sessionState.value) {
+            is SessionState.Recording -> RecordingService.stop(context)
+            SessionState.Starting -> Unit
+            else -> RecordingService.start(context, _loopSeconds.value)
         }
     }
 }

@@ -8,7 +8,10 @@ find_package(oboe REQUIRED CONFIG)
 
 add_library(loopcam_audio SHARED
         jni_bridge.cpp
-        LoopEngine.cpp)
+        LoopEngine.cpp
+        core/LoopCore.cpp
+        core/WavWriter.cpp
+        core/AudioFileWriter.cpp)
 
 target_compile_options(loopcam_audio PRIVATE -Wall -Wextra -O2)
 target_link_libraries(loopcam_audio PRIVATE oboe::oboe log)

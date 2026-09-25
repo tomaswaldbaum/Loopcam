@@ -1,16 +1,21 @@
 package io.loopcam.app.ui
 
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +33,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.loopcam.app.R
 import io.loopcam.app.session.SessionState
+import io.loopcam.core.audio.AudioStatus
 import io.loopcam.core.audio.LoopConfig
 
 @Composable
@@ -35,8 +41,12 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
+    val audioStatus by viewModel.audioStatus.collectAsStateWithLifecycle()
     val loopSeconds by viewModel.loopSeconds.collectAsStateWithLifecycle()
+    val overdub by viewModel.overdub.collectAsStateWithLifecycle()
+    val click by viewModel.click.collectAsStateWithLifecycle()
     val isRecording = sessionState is SessionState.Recording
+    val isBusy = isRecording || sessionState is SessionState.Starting
 
     val previewView = remember { PreviewView(context) }
     LaunchedEffect(previewView, lifecycleOwner) {
@@ -50,25 +60,91 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.55f))
                 .navigationBarsPadding()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            (sessionState as? SessionState.Error)?.let {
-                Text(it.message, color = MaterialTheme.colorScheme.error)
+            SessionMessage(sessionState)
+            audioStatus?.let { LoopStatus(it) }
+
+            if (!isBusy) {
+                Text(stringResource(R.string.headphones_hint), color = Color.White, style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.loop_length, loopSeconds), color = Color.White)
+                Slider(
+                    value = loopSeconds.toFloat(),
+                    onValueChange = { viewModel.setLoopSeconds(it.toDouble()) },
+                    valueRange = LoopConfig.MIN_LOOP_SECONDS.toFloat()..LoopConfig.MAX_LOOP_SECONDS.toFloat(),
+                )
             }
-            Text(stringResource(R.string.headphones_hint), color = Color.White, style = MaterialTheme.typography.bodySmall)
-            Text(stringResource(R.string.loop_length, loopSeconds), color = Color.White)
-            Slider(
-                value = loopSeconds.toFloat(),
-                onValueChange = { viewModel.setLoopSeconds(it.toDouble()) },
-                valueRange = LoopConfig.MIN_LOOP_SECONDS.toFloat()..LoopConfig.MAX_LOOP_SECONDS.toFloat(),
-                enabled = !isRecording,
-            )
-            Button(onClick = viewModel::toggleRecording) {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LabeledSwitch(stringResource(R.string.overdub), overdub, viewModel::setOverdub)
+                LabeledSwitch(stringResource(R.string.click), click, viewModel::setClickEnabled)
+                OutlinedButton(onClick = viewModel::undoLastLayer, enabled = isRecording) {
+                    Text(stringResource(R.string.undo))
+                }
+            }
+
+            Button(onClick = viewModel::toggleRecording, enabled = sessionState !is SessionState.Starting) {
                 Text(stringResource(if (isRecording) R.string.stop else R.string.record))
             }
         }
+    }
+}
+
+@Composable
+private fun SessionMessage(state: SessionState) {
+    when (state) {
+        SessionState.Starting -> Text(stringResource(R.string.starting), color = Color.White)
+        is SessionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
+        is SessionState.Finished -> {
+            val result = state.result
+            result.interruptedReason?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Text(
+                stringResource(R.string.session_saved, result.layers, result.directory.name),
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (result.audioOffsetNanos == null) {
+                Text(stringResource(R.string.session_offset_unknown), color = Color.White, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        else -> Unit
+    }
+}
+
+@Composable
+private fun LoopStatus(status: AudioStatus) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(stringResource(R.string.layers, status.committedLayers, status.maxLayers), color = Color.White)
+            Text(
+                stringResource(if (status.recordingLayer) R.string.layer_recording else R.string.layer_playing),
+                color = if (status.recordingLayer) MaterialTheme.colorScheme.primary else Color.White,
+            )
+            Text(stringResource(R.string.latency, status.latencyMillis), color = Color.White)
+        }
+        LinearProgressIndicator(progress = { status.progress }, modifier = Modifier.fillMaxWidth())
+        if (status.droppedFrames > 0) {
+            Text(
+                stringResource(R.string.dropped_frames, status.droppedFrames),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LabeledSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, color = Color.White)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
