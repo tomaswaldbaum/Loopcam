@@ -1,11 +1,15 @@
 package io.loopcam.app.session
 
 import android.content.Context
+import android.net.Uri
 import android.os.Environment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.loopcam.core.audio.AudioEngine
 import io.loopcam.core.audio.AudioStatus
 import io.loopcam.core.audio.LoopConfig
+import io.loopcam.core.export.ExportRequest
+import io.loopcam.core.export.GallerySaver
+import io.loopcam.core.export.SessionExporter
 import io.loopcam.core.video.CameraVideoRecorder
 import io.loopcam.core.video.VideoState
 import java.io.File
@@ -19,27 +23,35 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
-/** Lo que queda en disco al terminar una sesión; es la entrada del export. */
+/** Lo que queda al terminar una sesión. */
 data class SessionResult(
     val directory: File,
     val video: File,
     val audioMix: File,
     /** Cuánto después del inicio del video empieza el WAV (negativo: antes). Null si no se pudo medir. */
     val audioOffsetNanos: Long?,
+    /** true si el inicio del video viene del timestamp de sensor del primer frame. */
+    val videoStartFrameAccurate: Boolean,
     val layers: Int,
     val interruptedReason: String? = null,
+    /** MP4 final en la galería; null si el export falló o no se hizo. */
+    val galleryUri: Uri? = null,
+    val exportError: String? = null,
 )
 
 sealed interface SessionState {
     data object Idle : SessionState
     data object Starting : SessionState
     data class Recording(val config: LoopConfig, val directory: File) : SessionState
+    data class Exporting(val progress: Float) : SessionState
     data class Finished(val result: SessionResult) : SessionState
     data class Error(val message: String) : SessionState
 }
@@ -50,6 +62,7 @@ class SessionController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val audioEngine: AudioEngine,
     val videoRecorder: CameraVideoRecorder,
+    private val exporter: SessionExporter,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutex = Mutex()
@@ -69,7 +82,9 @@ class SessionController @Inject constructor(
 
     suspend fun start(config: LoopConfig) = mutex.withLock {
         val current = _state.value
-        if (current is SessionState.Recording || current is SessionState.Starting) return@withLock
+        if (current is SessionState.Recording || current is SessionState.Starting || current is SessionState.Exporting) {
+            return@withLock
+        }
         _state.value = SessionState.Starting
 
         val directory = newSessionDirectory()
@@ -92,27 +107,55 @@ class SessionController @Inject constructor(
         val recording = _state.value as? SessionState.Recording ?: return@withLock
         pollJob?.cancel()
         val audio = audioEngine.status()
-        val videoStartNanos = (videoRecorder.state.value as? VideoState.Recording)?.startNanos
 
         videoRecorder.stop()
         withContext(Dispatchers.Default) { audioEngine.stop() }
         _audioStatus.value = null
+        // El MP4 recién es válido cuando CameraX lo finaliza.
+        val video = withTimeoutOrNull(VIDEO_FINALIZE_TIMEOUT_MS) {
+            videoRecorder.state.first { it is VideoState.Finished || it is VideoState.Error }
+        } as? VideoState.Finished
 
-        val audioOffset = if (videoStartNanos != null && audio != null && audio.fileStartNanos > 0) {
-            audio.fileStartNanos - videoStartNanos
+        val audioOffset = if (video != null && audio != null && audio.fileStartNanos > 0) {
+            audio.fileStartNanos - video.startNanos
         } else {
             null
         }
-        val result = SessionResult(
+        var result = SessionResult(
             directory = recording.directory,
             video = File(recording.directory, VIDEO_FILE),
             audioMix = File(recording.directory, AUDIO_FILE),
             audioOffsetNanos = audioOffset,
+            videoStartFrameAccurate = video?.frameAccurate ?: false,
             layers = audio?.committedLayers ?: 0,
             interruptedReason = interruptedReason,
         )
         withContext(Dispatchers.IO) { writeMetadata(result, recording.config, audio) }
+
+        result = if (video == null) {
+            result.copy(exportError = "El video no se finalizó correctamente")
+        } else {
+            export(result, video.durationNanos)
+        }
         _state.value = SessionState.Finished(result)
+    }
+
+    private suspend fun export(result: SessionResult, videoDurationNanos: Long): SessionResult {
+        _state.value = SessionState.Exporting(0f)
+        val output = File(result.directory, EXPORT_FILE)
+        val request = ExportRequest(
+            video = result.video,
+            audioMix = result.audioMix,
+            audioOffsetNanos = result.audioOffsetNanos ?: 0L,
+            videoDurationNanos = videoDurationNanos,
+            output = output,
+        )
+        return exporter.export(request) { progress -> _state.value = SessionState.Exporting(progress) }
+            .mapCatching { file -> GallerySaver.saveVideo(context, file, "LoopCam_${result.directory.name}.mp4") }
+            .fold(
+                onSuccess = { uri -> result.copy(galleryUri = uri) },
+                onFailure = { e -> result.copy(exportError = e.message ?: e.javaClass.simpleName) },
+            )
     }
 
     /** Para usar desde callbacks sin corrutina (p. ej. onDestroy del servicio). */
@@ -157,6 +200,7 @@ class SessionController @Inject constructor(
             add("loopSeconds=${config.loopSeconds}")
             add("layers=${result.layers}")
             add("audioOffsetNanos=${result.audioOffsetNanos ?: ""}")
+            add("videoStartFrameAccurate=${result.videoStartFrameAccurate}")
             audio?.let {
                 add("sampleRate=${it.sampleRate}")
                 add("latencyFrames=${it.latencyFrames}")
@@ -171,6 +215,8 @@ class SessionController @Inject constructor(
         const val VIDEO_FILE = "video.mp4"
         const val AUDIO_FILE = "mix.wav"
         const val METADATA_FILE = "session.properties"
+        const val EXPORT_FILE = "loopcam.mp4"
+        const val VIDEO_FINALIZE_TIMEOUT_MS = 5_000L
         const val POLL_INTERVAL_MS = 33L
     }
 }

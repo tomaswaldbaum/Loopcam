@@ -30,9 +30,16 @@ Oboe FullDuplexStream (mic + auriculares, LowLatency/Exclusive, float mono)
 - **Compensación de latencia:** al arrancar, los streams corren 300 ms "desarmados" y después se mide la latencia de ida y vuelta (`calculateLatencyMillis` de entrada + salida). El input se escribe en `pos - latencia`.
 - **Capas:** hasta 16, con un presupuesto de 64 MB. Con loops largos entran menos. Al llenarse, las vueltas nuevas se suman sobre la última capa.
 - **Deshacer:** descarta la última capa terminada y la que se está grabando; la grabación sigue desde la vuelta siguiente.
-- **Sincronía:** `fileStartNanos` es el instante de captura (CLOCK_MONOTONIC) del primer sample del WAV, calculado con `getTimestamp` del input. `SessionResult.audioOffsetNanos` es la diferencia con el inicio del video.
+### Sincronía y export
 
-Cada sesión queda en `Android/data/io.loopcam.app/files/Movies/sessions/<timestamp>/`, con `video.mp4`, `mix.wav` y `session.properties`.
+1. **Audio:** `fileStartNanos` es el instante de captura del primer sample del WAV (`getTimestamp` del input de AAudio, CLOCK_MONOTONIC).
+2. **Video:** con `Camera2Interop` se lee el `SENSOR_TIMESTAMP` del primer frame posterior al evento `Start` de CameraX. `SensorClock` lo pasa a CLOCK_MONOTONIC, porque algunos sensores usan BOOTTIME. Si no llega, se usa la hora del evento y la UI avisa que la sincronía es aproximada.
+3. **Offset:** `audioOffsetNanos = fileStartNanos - videoStartNanos`.
+4. **Alineación:** al detener, se espera a que CameraX finalice el MP4. Después `WavAligner` agrega silencio al principio o recorta el WAV según el offset, y lo ajusta a la duración exacta del video.
+5. **Export:** Media3 Transformer arma una `Composition` con dos secuencias: el video, que se copia sin recodificar (`setTransmuxVideo`), y la mezcla alineada, que se codifica a AAC.
+6. **Galería:** `GallerySaver` copia el resultado a `Movies/LoopCam` vía MediaStore, sin pedir permisos, y la UI ofrece abrirlo.
+
+Cada sesión queda en `Android/data/io.loopcam.app/files/Movies/sessions/<timestamp>/`, con `video.mp4`, `mix.wav`, `loopcam.mp4` (el resultado) y `session.properties`.
 
 ## Requisitos
 
@@ -61,5 +68,7 @@ cmake --build build/native-tests && ctest --test-dir build/native-tests --output
 - [x] Preview y grabación de video sin audio con CameraX
 - [x] Motor full-duplex: capas, overdub, deshacer, click, compensación de latencia, WAV en streaming
 - [x] Timestamp real del inicio del audio (AAudio `getTimestamp`)
-- [ ] Timestamp real del primer frame de video y calibración manual de latencia desde la UI
-- [ ] Export con Media3 Transformer → MediaStore
+- [x] Timestamp de sensor del primer frame de video y offset de sincronía
+- [x] Export con Media3 Transformer → galería (MediaStore)
+- [ ] Grabar con la pantalla apagada (ligar la cámara al servicio)
+- [ ] Calibración manual de latencia y de sincronía desde la UI

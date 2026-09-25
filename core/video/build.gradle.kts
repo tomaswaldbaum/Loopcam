@@ -32,4 +32,6 @@ dependencies {
     implementation(libs.androidx.camera.video)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 }

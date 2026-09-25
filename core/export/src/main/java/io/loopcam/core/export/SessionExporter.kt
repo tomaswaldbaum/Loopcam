@@ -7,15 +7,17 @@ import java.io.File
  *
  * @param audioOffsetNanos cuánto después del inicio del video arrancó el audio
  *   (negativo si arrancó antes).
+ * @param videoDurationNanos duración del video; el audio se ajusta a esa longitud.
  */
 data class ExportRequest(
     val video: File,
     val audioMix: File,
     val audioOffsetNanos: Long,
+    val videoDurationNanos: Long,
     val output: File,
 )
 
-/** Une el video continuo con la mezcla de loops en un único MP4 (Media3 Transformer). */
+/** Une el video continuo con la mezcla de loops en un único MP4. */
 interface SessionExporter {
-    suspend fun export(request: ExportRequest): Result<File>
+    suspend fun export(request: ExportRequest, onProgress: (Float) -> Unit = {}): Result<File>
 }

@@ -18,6 +18,11 @@
     <string name="undo">Deshacer capa</string>
     <string name="session_saved">Sesión guardada (%1$d capas): %2$s</string>
     <string name="session_offset_unknown">No se pudo medir el offset de sincronía de audio.</string>
+    <string name="session_offset_approximate">El inicio del video es aproximado (no hubo timestamp de sensor).</string>
+    <string name="exporting">Exportando video… %1$d%%</string>
+    <string name="exported">Guardado en la galería (Movies/LoopCam)</string>
+    <string name="export_failed">No se pudo exportar: %1$s</string>
+    <string name="open_video">Ver</string>
     <string name="notification_channel">Grabación</string>
     <string name="notification_recording">Grabando sesión…</string>
 </resources>

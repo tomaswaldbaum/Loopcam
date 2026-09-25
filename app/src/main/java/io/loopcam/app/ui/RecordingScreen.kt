@@ -1,5 +1,8 @@
 package io.loopcam.app.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -46,7 +49,7 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
     val overdub by viewModel.overdub.collectAsStateWithLifecycle()
     val click by viewModel.click.collectAsStateWithLifecycle()
     val isRecording = sessionState is SessionState.Recording
-    val isBusy = isRecording || sessionState is SessionState.Starting
+    val isBusy = isRecording || sessionState is SessionState.Starting || sessionState is SessionState.Exporting
 
     val previewView = remember { PreviewView(context) }
     LaunchedEffect(previewView, lifecycleOwner) {
@@ -91,7 +94,10 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
                 }
             }
 
-            Button(onClick = viewModel::toggleRecording, enabled = sessionState !is SessionState.Starting) {
+            Button(
+                onClick = viewModel::toggleRecording,
+                enabled = sessionState !is SessionState.Starting && sessionState !is SessionState.Exporting,
+            ) {
                 Text(stringResource(if (isRecording) R.string.stop else R.string.record))
             }
         }
@@ -100,8 +106,13 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
 
 @Composable
 private fun SessionMessage(state: SessionState) {
+    val context = LocalContext.current
     when (state) {
         SessionState.Starting -> Text(stringResource(R.string.starting), color = Color.White)
+        is SessionState.Exporting -> {
+            Text(stringResource(R.string.exporting, (state.progress * 100).toInt()), color = Color.White)
+            LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
+        }
         is SessionState.Error -> Text(state.message, color = MaterialTheme.colorScheme.error)
         is SessionState.Finished -> {
             val result = state.result
@@ -111,12 +122,34 @@ private fun SessionMessage(state: SessionState) {
                 color = Color.White,
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (result.audioOffsetNanos == null) {
-                Text(stringResource(R.string.session_offset_unknown), color = Color.White, style = MaterialTheme.typography.bodySmall)
+            when {
+                result.audioOffsetNanos == null -> SmallNote(stringResource(R.string.session_offset_unknown))
+                !result.videoStartFrameAccurate -> SmallNote(stringResource(R.string.session_offset_approximate))
+            }
+            result.exportError?.let {
+                Text(stringResource(R.string.export_failed, it), color = MaterialTheme.colorScheme.error)
+            }
+            result.galleryUri?.let { uri ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.exported), color = Color.White)
+                    OutlinedButton(onClick = { context.openVideo(uri) }) { Text(stringResource(R.string.open_video)) }
+                }
             }
         }
         else -> Unit
     }
+}
+
+@Composable
+private fun SmallNote(text: String) {
+    Text(text, color = Color.White, style = MaterialTheme.typography.bodySmall)
+}
+
+private fun Context.openVideo(uri: Uri) {
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(uri, "video/mp4")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    runCatching { startActivity(intent) }
 }
 
 @Composable

@@ -52,7 +52,7 @@ class SessionViewModel @Inject constructor(
         val context = getApplication<Application>()
         when (sessionState.value) {
             is SessionState.Recording -> RecordingService.stop(context)
-            SessionState.Starting -> Unit
+            SessionState.Starting, is SessionState.Exporting -> Unit
             else -> RecordingService.start(context, _loopSeconds.value)
         }
     }
