@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">LoopCam</string>
+    <string name="permissions_title">Permisos necesarios</string>
+    <string name="permissions_body">LoopCam necesita la cámara y el micrófono para grabar video y loops de audio.</string>
+    <string name="permissions_grant">Dar permisos</string>
+    <string name="loop_length">Loop: %1$.1f s</string>
+    <string name="record">Grabar</string>
+    <string name="stop">Detener</string>
+    <string name="headphones_hint">Usá auriculares con cable para evitar que el micrófono grabe el loop.</string>
+    <string name="notification_channel">Grabación</string>
+    <string name="notification_recording">Grabando sesión…</string>
+</resources>
