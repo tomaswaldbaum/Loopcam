@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +22,28 @@ jobs:
 
       - name: Build and unit test
         run: ./gradlew assembleDebug testDebugUnitTest --stacktrace
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk loopcam-debug-${{ github.run_number }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loopcam-debug-apk
+          path: loopcam-debug-${{ github.run_number }}.apk
+
+      # Release con la APK para poder bajarla directo desde el navegador del teléfono.
+      - name: Publish debug release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: LoopCam debug ${{ github.run_number }} (${{ github.ref_name }})
+          prerelease: true
+          body: |
+            APK de prueba (debug) del commit ${{ github.sha }} en `${{ github.ref_name }}`.
+            Firmada con la clave debug del runner de CI: para instalar una versión nueva quizás haya que desinstalar la anterior.
+          files: loopcam-debug-${{ github.run_number }}.apk
 
   native-tests:
     runs-on: ubuntu-latest
