@@ -16,9 +16,9 @@
 namespace loopcam {
 
 namespace {
-// Memoria máxima para capas: 16 M samples float = 64 MB.
-constexpr int64_t kLayerBudgetSamples = 16LL * 1024 * 1024;
-constexpr int32_t kMaxLayers = 16;
+// Memoria máxima para capas: 24 M samples float = 96 MB (ver SessionConfig.maxLayersFor en Kotlin).
+constexpr int64_t kLayerBudgetSamples = 24LL * 1024 * 1024;
+constexpr int32_t kMaxLayers = 24;
 // Tiempo para que los streams se estabilicen antes de medir la latencia.
 constexpr auto kWarmUp = std::chrono::milliseconds(300);
 }  // namespace
@@ -74,24 +74,31 @@ bool LoopEngine::openStreams(int32_t sampleRate) {
     return true;
 }
 
-bool LoopEngine::startSession(int32_t sampleRate, double loopSeconds, const std::string &wavPath,
-                       int32_t latencyOffsetFrames) {
+bool LoopEngine::startSession(const SessionParams &params, const std::string &wavPath) {
     stopSession();
     mDisconnected.store(false);
-    if (!openStreams(sampleRate)) return false;
+    if (!openStreams(params.sampleRate)) return false;
 
     mSampleRate = mOutput->getSampleRate();
-    const auto loopFrames = static_cast<int32_t>(std::lround(loopSeconds * mSampleRate));
-    const auto maxLayers = static_cast<int32_t>(
+    const auto loopFrames = static_cast<int32_t>(std::lround(params.loopSeconds * mSampleRate));
+    const auto memoryLimit = static_cast<int32_t>(
             std::clamp<int64_t>(kLayerBudgetSamples / std::max(loopFrames, 1), 1, kMaxLayers));
+    const int32_t maxLayers = std::clamp(params.maxLayers, 1, memoryLimit);
 
     // Todo lo que usa el callback se aloca acá, antes de arrancar.
     const int32_t capacity = std::max(mOutput->getBufferCapacityInFrames(), 4096);
     mInputScratch.assign(capacity, 0.0f);
     mFileScratch.assign(capacity, 0.0f);
-    mCore.prepare(loopFrames, maxLayers, mSampleRate);
+    LoopParams loop;
+    loop.loopFrames = loopFrames;
+    loop.beatsPerLoop = params.beatsPerLoop;
+    loop.beatsPerBar = params.beatsPerBar;
+    loop.countInBeats = params.countInBeats;
+    loop.maxLayers = maxLayers;
+    loop.sampleRate = mSampleRate;
+    mCore.prepare(loop);
     mFileStartInputFrame.store(-1);
-    mFileStartNanos = 0;
+    mFileStartNanos.store(0);
 
     if (!mWriter.start(wavPath, mSampleRate)) {
         LOGE("No se pudo crear %s", wavPath.c_str());
@@ -108,19 +115,21 @@ bool LoopEngine::startSession(int32_t sampleRate, double loopSeconds, const std:
 
     // Los streams corren "desarmados" (silencio) mientras se estabilizan.
     std::this_thread::sleep_for(kWarmUp);
-    const int32_t latency = std::max(0, measureLatencyFrames() + latencyOffsetFrames);
+    const int32_t latency = std::max(0, measureLatencyFrames() + params.latencyOffsetFrames);
     mCore.setLatencyFrames(latency);
     mArmed.store(true, std::memory_order_release);
 
-    LOGI("Loop armado: loopFrames=%d maxLayers=%d latency=%d frames (%.1f ms)",
-         loopFrames, maxLayers, mCore.latencyFrames(),
+    LOGI("Loop armado: loopFrames=%d beats=%d/%d countIn=%d maxLayers=%d latency=%d frames (%.1f ms)",
+         mCore.loopFrames(), mCore.beatsPerLoop(), mCore.beatsPerBar(), mCore.countInBeats(),
+         maxLayers, mCore.latencyFrames(),
          1000.0 * mCore.latencyFrames() / mSampleRate);
 
-    // Esperar al primer callback armado para poder fechar el inicio del archivo.
+    // Esperar al primer callback armado para poder fechar el inicio del archivo
+    // (que queda en el futuro si hay cuenta regresiva).
     for (int i = 0; i < 50 && mFileStartInputFrame.load() < 0; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    mFileStartNanos = computeFileStartNanos();
+    mFileStartNanos.store(computeFileStartNanos());
     return true;
 }
 
@@ -175,6 +184,14 @@ int64_t LoopEngine::computeFileStartNanos() const {
 
 EngineStatus LoopEngine::status() const {
     EngineStatus s;
+    s.phase = static_cast<int32_t>(mCore.phase());
+    s.countInBeatsRemaining = mCore.countInBeatsRemaining();
+    s.currentBeat = mCore.currentBeat();
+    s.cycle = mCore.cycle();
+    s.layersFull = mCore.layersFull();
+    s.beatsPerLoop = mCore.beatsPerLoop();
+    s.beatsPerBar = mCore.beatsPerBar();
+    s.countInBeats = mCore.countInBeats();
     s.committedLayers = mCore.committedLayers();
     s.maxLayers = mCore.maxLayers();
     s.position = mCore.position();
@@ -184,7 +201,7 @@ EngineStatus LoopEngine::status() const {
     s.recordingLayer = mCore.isRecordingLayer();
     s.disconnected = mDisconnected.load();
     s.droppedFrames = static_cast<int64_t>(mWriter.droppedFrames());
-    s.fileStartNanos = mFileStartNanos;
+    s.fileStartNanos = mFileStartNanos.load();
     return s;
 }
 
@@ -199,9 +216,11 @@ oboe::DataCallbackResult LoopEngine::onBothStreamsReady(const void *inputData, i
     }
 
     if (mFileStartInputFrame.load(std::memory_order_relaxed) < 0) {
-        // El primer sample del archivo es el input que llega `latency` frames después del arranque.
+        // El primer sample del archivo es el input que llega después de la cuenta regresiva
+        // más `latency` frames.
         const int64_t firstInputFrame = getInputStream()->getFramesRead() - numInputFrames;
-        mFileStartInputFrame.store(firstInputFrame + mCore.latencyFrames(), std::memory_order_relaxed);
+        mFileStartInputFrame.store(firstInputFrame + mCore.countInFrames() + mCore.latencyFrames(),
+                                   std::memory_order_relaxed);
     }
 
     // Si el input trae menos frames que el output, completar con silencio.

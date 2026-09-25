@@ -14,11 +14,21 @@ class NativeAudioEngine : AudioEngine {
     private var handle: Long = nativeCreate()
 
     @Synchronized
-    override fun start(config: LoopConfig, output: File, latencyOffsetFrames: Int): Boolean {
+    override fun start(config: SessionConfig, output: File, latencyOffsetFrames: Int): Boolean {
         check(handle != 0L) { "AudioEngine ya fue liberado" }
         if (_state.value is AudioEngineState.Running) return true
         output.parentFile?.mkdirs()
-        val started = nativeStart(handle, config.sampleRate, config.loopSeconds, output.absolutePath, latencyOffsetFrames)
+        val started = nativeStart(
+            handle = handle,
+            sampleRate = config.sampleRate,
+            loopSeconds = config.loopSeconds,
+            beatsPerLoop = config.beatsPerLoop,
+            beatsPerBar = config.beatsPerBar,
+            countInBeats = config.countInBeats,
+            maxLayers = config.effectiveMaxLayers,
+            wavPath = output.absolutePath,
+            latencyOffsetFrames = latencyOffsetFrames,
+        )
         _state.value = if (started) {
             AudioEngineState.Running(config, output)
         } else {
@@ -38,8 +48,8 @@ class NativeAudioEngine : AudioEngine {
         if (handle != 0L) nativeSetOverdub(handle, enabled)
     }
 
-    override fun setClickEnabled(enabled: Boolean) {
-        if (handle != 0L) nativeSetClickEnabled(handle, enabled)
+    override fun setMetronome(inCountIn: Boolean, whileRecording: Boolean) {
+        if (handle != 0L) nativeSetMetronome(handle, inCountIn, whileRecording)
     }
 
     override fun undoLastLayer() {
@@ -64,12 +74,16 @@ class NativeAudioEngine : AudioEngine {
         handle: Long,
         sampleRate: Int,
         loopSeconds: Double,
+        beatsPerLoop: Int,
+        beatsPerBar: Int,
+        countInBeats: Int,
+        maxLayers: Int,
         wavPath: String,
         latencyOffsetFrames: Int,
     ): Boolean
     private external fun nativeStop(handle: Long)
     private external fun nativeSetOverdub(handle: Long, enabled: Boolean)
-    private external fun nativeSetClickEnabled(handle: Long, enabled: Boolean)
+    private external fun nativeSetMetronome(handle: Long, inCountIn: Boolean, whileRecording: Boolean)
     private external fun nativeUndo(handle: Long)
     private external fun nativeGetStatus(handle: Long): LongArray
     private external fun nativeDestroy(handle: Long)

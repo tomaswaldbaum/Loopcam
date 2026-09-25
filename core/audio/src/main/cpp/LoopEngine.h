@@ -14,6 +14,14 @@
 namespace loopcam {
 
 struct EngineStatus {
+    int32_t phase = 0;  // LoopCore::Phase
+    int32_t countInBeatsRemaining = 0;
+    int32_t currentBeat = 0;
+    int64_t cycle = 0;
+    bool layersFull = false;
+    int32_t beatsPerLoop = 0;
+    int32_t beatsPerBar = 0;
+    int32_t countInBeats = 0;
     int32_t committedLayers = 0;
     int32_t maxLayers = 0;
     int32_t position = 0;
@@ -40,12 +48,21 @@ public:
      * Abre los streams, mide la latencia y arranca el loop. Bloquea unos ~300 ms:
      * llamar fuera del hilo principal.
      */
-    bool startSession(int32_t sampleRate, double loopSeconds, const std::string &wavPath,
-               int32_t latencyOffsetFrames);
+    struct SessionParams {
+        int32_t sampleRate = 48000;
+        double loopSeconds = 4.0;
+        int32_t beatsPerLoop = 4;
+        int32_t beatsPerBar = 4;
+        int32_t countInBeats = 0;
+        int32_t maxLayers = 1;
+        int32_t latencyOffsetFrames = 0;
+    };
+
+    bool startSession(const SessionParams &params, const std::string &wavPath);
     void stopSession();
 
     void setOverdub(bool enabled) { mCore.setOverdub(enabled); }
-    void setClickEnabled(bool enabled) { mCore.setClickEnabled(enabled); }
+    void setMetronome(bool inCountIn, bool whileLooping) { mCore.setMetronome(inCountIn, whileLooping); }
     void undoLastLayer() { mCore.requestUndo(); }
 
     EngineStatus status() const;
@@ -72,7 +89,7 @@ private:
     std::atomic<bool> mArmed{false};
     std::atomic<bool> mDisconnected{false};
     std::atomic<int64_t> mFileStartInputFrame{-1};
-    int64_t mFileStartNanos = 0;
+    std::atomic<int64_t> mFileStartNanos{0};
 };
 
 }  // namespace loopcam

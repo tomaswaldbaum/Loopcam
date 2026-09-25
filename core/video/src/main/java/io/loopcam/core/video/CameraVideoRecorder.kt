@@ -10,6 +10,7 @@ import androidx.annotation.OptIn
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.MirrorMode
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
@@ -30,6 +31,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+
+enum class CameraLens { BACK, FRONT }
 
 sealed interface VideoState {
     data object Idle : VideoState
@@ -69,11 +72,24 @@ class CameraVideoRecorder(private val context: Context) {
     private val _state = MutableStateFlow<VideoState>(VideoState.Idle)
     val state: StateFlow<VideoState> = _state.asStateFlow()
 
-    suspend fun bind(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider) {
+    /** Liga preview + grabación a la cámara elegida. No llamar mientras se graba. */
+    suspend fun bind(lifecycleOwner: LifecycleOwner, surfaceProvider: Preview.SurfaceProvider, lens: CameraLens) {
         val provider = cameraProvider()
         val preview = Preview.Builder().build().also { it.setSurfaceProvider(surfaceProvider) }
+        val selector = lens.selector().takeIf { provider.hasCamera(it) } ?: CameraSelector.DEFAULT_BACK_CAMERA
         provider.unbindAll()
-        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, videoCapture)
+        provider.bindToLifecycle(lifecycleOwner, selector, preview, videoCapture)
+    }
+
+    /** Cámaras disponibles en el dispositivo. */
+    suspend fun availableLenses(): List<CameraLens> {
+        val provider = cameraProvider()
+        return CameraLens.entries.filter { provider.hasCamera(it.selector()) }
+    }
+
+    private fun CameraLens.selector(): CameraSelector = when (this) {
+        CameraLens.BACK -> CameraSelector.DEFAULT_BACK_CAMERA
+        CameraLens.FRONT -> CameraSelector.DEFAULT_FRONT_CAMERA
     }
 
     fun start(output: File) {
@@ -129,6 +145,8 @@ class CameraVideoRecorder(private val context: Context) {
     @OptIn(ExperimentalCamera2Interop::class)
     private fun buildVideoCapture(): VideoCapture<Recorder> {
         val builder = VideoCapture.Builder(recorder)
+            // El video de la cámara frontal queda espejado igual que el preview.
+            .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
         Camera2Interop.Extender(builder).setSessionCaptureCallback(
             object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(

@@ -26,9 +26,11 @@ Oboe FullDuplexStream (mic + auriculares, LowLatency/Exclusive, float mono)
                             ──► SpscRingBuffer (lock-free) ──► hilo AudioFileWriter ──► mix.wav (PCM 16-bit)
 ```
 
-- **Longitud fija:** cada vuelta completa con *overdub* activo cierra una capa, que empieza a sonar en la vuelta siguiente.
+- **Largo del loop:** en BPM (compás × compases) o en segundos; siempre se divide en tiempos enteros, así el metrónomo no se corre.
+- **Cuenta regresiva:** 0, 1 o 2 compases en los que solo suena el metrónomo; no se graba audio. La cámara arranca ~500 ms antes del final de la cuenta y el video exportado empieza con el loop.
+- **Metrónomo:** click en cada tiempo, con acento en el primero del compás. Se activa por separado para la cuenta y para la grabación. Sale solo por la salida de audio (auriculares) y nunca se escribe en el archivo.
+- **Capas:** cada vuelta completa con *overdub* activo cierra una capa, que empieza a sonar en la vuelta siguiente. El máximo se configura entre 1 y 24 (limitado por memoria en loops largos); al llegar, se deja de grabar hasta deshacer una.
 - **Compensación de latencia:** al arrancar, los streams corren 300 ms "desarmados" y después se mide la latencia de ida y vuelta (`calculateLatencyMillis` de entrada + salida). El input se escribe en `pos - latencia`.
-- **Capas:** hasta 16, con un presupuesto de 64 MB. Con loops largos entran menos. Al llenarse, las vueltas nuevas se suman sobre la última capa.
 - **Deshacer:** descarta la última capa terminada y la que se está grabando; la grabación sigue desde la vuelta siguiente.
 ### Sincronía y export
 
@@ -70,5 +72,6 @@ cmake --build build/native-tests && ctest --test-dir build/native-tests --output
 - [x] Timestamp real del inicio del audio (AAudio `getTimestamp`)
 - [x] Timestamp de sensor del primer frame de video y offset de sincronía
 - [x] Export con Media3 Transformer → galería (MediaStore)
+- [x] Cuenta regresiva, metrónomo por BPM, capas máximas configurables, cámara frontal/trasera, indicadores en pantalla, ajustes persistentes
 - [ ] Grabar con la pantalla apagada (ligar la cámara al servicio)
 - [ ] Calibración manual de latencia y de sincronía desde la UI

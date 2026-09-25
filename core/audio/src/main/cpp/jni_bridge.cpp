@@ -24,6 +24,14 @@ enum StatusField {
     kDisconnected,
     kDroppedFrames,
     kFileStartNanos,
+    kPhase,
+    kCountInBeatsRemaining,
+    kCurrentBeat,
+    kCycle,
+    kLayersFull,
+    kBeatsPerLoop,
+    kBeatsPerBar,
+    kCountInBeats,
     kStatusFieldCount
 };
 }  // namespace
@@ -38,12 +46,21 @@ Java_io_loopcam_core_audio_NativeAudioEngine_nativeCreate(JNIEnv *, jobject) {
 JNIEXPORT jboolean JNICALL
 Java_io_loopcam_core_audio_NativeAudioEngine_nativeStart(JNIEnv *env, jobject, jlong handle,
                                                          jint sampleRate, jdouble loopSeconds,
+                                                         jint beatsPerLoop, jint beatsPerBar,
+                                                         jint countInBeats, jint maxLayers,
                                                          jstring wavPath, jint latencyOffsetFrames) {
     const char *path = env->GetStringUTFChars(wavPath, nullptr);
     const std::string pathString(path);
     env->ReleaseStringUTFChars(wavPath, path);
-    return fromHandle(handle)->startSession(sampleRate, loopSeconds, pathString, latencyOffsetFrames)
-           ? JNI_TRUE : JNI_FALSE;
+    LoopEngine::SessionParams params;
+    params.sampleRate = sampleRate;
+    params.loopSeconds = loopSeconds;
+    params.beatsPerLoop = beatsPerLoop;
+    params.beatsPerBar = beatsPerBar;
+    params.countInBeats = countInBeats;
+    params.maxLayers = maxLayers;
+    params.latencyOffsetFrames = latencyOffsetFrames;
+    return fromHandle(handle)->startSession(params, pathString) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
@@ -58,9 +75,9 @@ Java_io_loopcam_core_audio_NativeAudioEngine_nativeSetOverdub(JNIEnv *, jobject,
 }
 
 JNIEXPORT void JNICALL
-Java_io_loopcam_core_audio_NativeAudioEngine_nativeSetClickEnabled(JNIEnv *, jobject, jlong handle,
-                                                                   jboolean enabled) {
-    fromHandle(handle)->setClickEnabled(enabled == JNI_TRUE);
+Java_io_loopcam_core_audio_NativeAudioEngine_nativeSetMetronome(JNIEnv *, jobject, jlong handle,
+                                                               jboolean inCountIn, jboolean whileLooping) {
+    fromHandle(handle)->setMetronome(inCountIn == JNI_TRUE, whileLooping == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL
@@ -82,6 +99,14 @@ Java_io_loopcam_core_audio_NativeAudioEngine_nativeGetStatus(JNIEnv *env, jobjec
     values[kDisconnected] = s.disconnected ? 1 : 0;
     values[kDroppedFrames] = s.droppedFrames;
     values[kFileStartNanos] = s.fileStartNanos;
+    values[kPhase] = s.phase;
+    values[kCountInBeatsRemaining] = s.countInBeatsRemaining;
+    values[kCurrentBeat] = s.currentBeat;
+    values[kCycle] = s.cycle;
+    values[kLayersFull] = s.layersFull ? 1 : 0;
+    values[kBeatsPerLoop] = s.beatsPerLoop;
+    values[kBeatsPerBar] = s.beatsPerBar;
+    values[kCountInBeats] = s.countInBeats;
     jlongArray result = env->NewLongArray(kStatusFieldCount);
     env->SetLongArrayRegion(result, 0, kStatusFieldCount, values);
     return result;

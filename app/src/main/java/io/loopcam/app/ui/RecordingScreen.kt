@@ -13,17 +13,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,27 +43,52 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.loopcam.app.R
 import io.loopcam.app.session.SessionState
 import io.loopcam.core.audio.AudioStatus
-import io.loopcam.core.audio.LoopConfig
+import io.loopcam.core.video.CameraLens
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val audioStatus by viewModel.audioStatus.collectAsStateWithLifecycle()
-    val loopSeconds by viewModel.loopSeconds.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val availableLenses by viewModel.availableLenses.collectAsStateWithLifecycle()
     val overdub by viewModel.overdub.collectAsStateWithLifecycle()
-    val click by viewModel.click.collectAsStateWithLifecycle()
+    val metronomeWhileRecording by viewModel.metronomeWhileRecording.collectAsStateWithLifecycle()
+    val headphonesConnected by viewModel.headphonesConnected.collectAsStateWithLifecycle()
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+
+    val isCountingIn = sessionState is SessionState.CountingIn
     val isRecording = sessionState is SessionState.Recording
-    val isBusy = isRecording || sessionState is SessionState.Starting || sessionState is SessionState.Exporting
+    val isBusy = isCountingIn || isRecording ||
+        sessionState is SessionState.Starting || sessionState is SessionState.Exporting
+    val config = settings.config
 
     val previewView = remember { PreviewView(context) }
-    LaunchedEffect(previewView, lifecycleOwner) {
-        viewModel.bindCamera(lifecycleOwner, previewView.surfaceProvider)
+    LaunchedEffect(previewView, lifecycleOwner, settings.lens) {
+        viewModel.bindCamera(lifecycleOwner, previewView.surfaceProvider, settings.lens)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+
+        audioStatus?.let { RecordingOverlay(it) }
+
+        if (!isBusy && availableLenses.size > 1) {
+            OutlinedButton(
+                onClick = {
+                    viewModel.setLens(if (settings.lens == CameraLens.BACK) CameraLens.FRONT else CameraLens.BACK)
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Black.copy(alpha = 0.4f)),
+            ) {
+                Text("⟲ " + stringResource(settings.lens.labelRes()), color = Color.White)
+            }
+        }
 
         Column(
             modifier = Modifier
@@ -65,42 +96,98 @@ fun RecordingScreen(viewModel: SessionViewModel = hiltViewModel()) {
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.55f))
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             SessionMessage(sessionState)
-            audioStatus?.let { LoopStatus(it) }
 
-            if (!isBusy) {
-                Text(stringResource(R.string.headphones_hint), color = Color.White, style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.loop_length, loopSeconds), color = Color.White)
-                Slider(
-                    value = loopSeconds.toFloat(),
-                    onValueChange = { viewModel.setLoopSeconds(it.toDouble()) },
-                    valueRange = LoopConfig.MIN_LOOP_SECONDS.toFloat()..LoopConfig.MAX_LOOP_SECONDS.toFloat(),
+            val metronomeAudible = if (isBusy) metronomeWhileRecording else config.metronomeWhileRecording
+            if (!headphonesConnected && metronomeAudible) {
+                Text(
+                    stringResource(R.string.speaker_metronome_warning),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                LabeledSwitch(stringResource(R.string.overdub), overdub, viewModel::setOverdub)
-                LabeledSwitch(stringResource(R.string.click), click, viewModel::setClickEnabled)
-                OutlinedButton(onClick = viewModel::undoLastLayer, enabled = isRecording) {
-                    Text(stringResource(R.string.undo))
+            if (!isBusy) {
+                Text(stringResource(R.string.headphones_hint), color = Color.White, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    stringResource(
+                        R.string.settings_summary,
+                        config.beatsPerLoop,
+                        config.effectiveBpm,
+                        config.loopSeconds,
+                        config.countInBars,
+                        config.effectiveMaxLayers,
+                    ),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedButton(onClick = { showSettings = true }) { Text(stringResource(R.string.settings)) }
+            }
+
+            if (isRecording) {
+                audioStatus?.let { LatencyAndDrops(it) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    LabeledSwitch(stringResource(R.string.overdub), overdub, viewModel::setOverdub, color = Color.White)
+                    LabeledSwitch(
+                        stringResource(R.string.metronome),
+                        metronomeWhileRecording,
+                        viewModel::setMetronomeWhileRecording,
+                        color = Color.White,
+                    )
                 }
+                OutlinedButton(onClick = viewModel::undoLastLayer) { Text(stringResource(R.string.undo)) }
             }
 
             Button(
                 onClick = viewModel::toggleRecording,
-                enabled = sessionState !is SessionState.Starting && sessionState !is SessionState.Exporting,
+                enabled = sessionState !is SessionState.Starting && sessionState !is SessionState.Exporting &&
+                    (isBusy || config.isLoopLengthValid),
             ) {
-                Text(stringResource(if (isRecording) R.string.stop else R.string.record))
+                Text(
+                    stringResource(
+                        when {
+                            isCountingIn -> R.string.cancel
+                            isRecording -> R.string.stop
+                            else -> R.string.record
+                        },
+                    ),
+                )
             }
         }
+    }
+
+    if (showSettings && !isBusy) {
+        ModalBottomSheet(
+            onDismissRequest = { showSettings = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            SettingsPanel(
+                settings = settings,
+                availableLenses = availableLenses,
+                onConfigChange = viewModel::updateConfig,
+                onLensChange = viewModel::setLens,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LatencyAndDrops(status: AudioStatus) {
+    Text(stringResource(R.string.latency, status.latencyMillis), color = Color.White, style = MaterialTheme.typography.bodySmall)
+    if (status.droppedFrames > 0) {
+        Text(
+            stringResource(R.string.dropped_frames, status.droppedFrames),
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 
@@ -150,34 +237,4 @@ private fun Context.openVideo(uri: Uri) {
         .setDataAndType(uri, "video/mp4")
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     runCatching { startActivity(intent) }
-}
-
-@Composable
-private fun LoopStatus(status: AudioStatus) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(stringResource(R.string.layers, status.committedLayers, status.maxLayers), color = Color.White)
-            Text(
-                stringResource(if (status.recordingLayer) R.string.layer_recording else R.string.layer_playing),
-                color = if (status.recordingLayer) MaterialTheme.colorScheme.primary else Color.White,
-            )
-            Text(stringResource(R.string.latency, status.latencyMillis), color = Color.White)
-        }
-        LinearProgressIndicator(progress = { status.progress }, modifier = Modifier.fillMaxWidth())
-        if (status.droppedFrames > 0) {
-            Text(
-                stringResource(R.string.dropped_frames, status.droppedFrames),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-@Composable
-private fun LabeledSwitch(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, color = Color.White)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
 }

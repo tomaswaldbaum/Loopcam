@@ -6,7 +6,7 @@ import android.os.Environment
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.loopcam.core.audio.AudioEngine
 import io.loopcam.core.audio.AudioStatus
-import io.loopcam.core.audio.LoopConfig
+import io.loopcam.core.audio.SessionConfig
 import io.loopcam.core.export.ExportRequest
 import io.loopcam.core.export.GallerySaver
 import io.loopcam.core.export.SessionExporter
@@ -50,7 +50,9 @@ data class SessionResult(
 sealed interface SessionState {
     data object Idle : SessionState
     data object Starting : SessionState
-    data class Recording(val config: LoopConfig, val directory: File) : SessionState
+    /** Suena la cuenta regresiva: todavía no se graba nada. */
+    data class CountingIn(val config: SessionConfig, val directory: File) : SessionState
+    data class Recording(val config: SessionConfig, val directory: File) : SessionState
     data class Exporting(val progress: Float) : SessionState
     data class Finished(val result: SessionResult) : SessionState
     data class Error(val message: String) : SessionState
@@ -77,33 +79,59 @@ class SessionController @Inject constructor(
     private val _overdub = MutableStateFlow(true)
     val overdub: StateFlow<Boolean> = _overdub.asStateFlow()
 
-    private val _click = MutableStateFlow(true)
-    val click: StateFlow<Boolean> = _click.asStateFlow()
+    private val _metronomeWhileRecording = MutableStateFlow(false)
+    val metronomeWhileRecording: StateFlow<Boolean> = _metronomeWhileRecording.asStateFlow()
+    private var metronomeInCountIn = true
 
-    suspend fun start(config: LoopConfig) = mutex.withLock {
-        val current = _state.value
-        if (current is SessionState.Recording || current is SessionState.Starting || current is SessionState.Exporting) {
-            return@withLock
+    val isBusy: Boolean
+        get() = when (_state.value) {
+            SessionState.Starting, is SessionState.CountingIn, is SessionState.Recording, is SessionState.Exporting -> true
+            else -> false
         }
+
+    suspend fun start(config: SessionConfig) = mutex.withLock {
+        if (isBusy) return@withLock
         _state.value = SessionState.Starting
 
         val directory = newSessionDirectory()
+        metronomeInCountIn = config.metronomeInCountIn
+        _metronomeWhileRecording.value = config.metronomeWhileRecording
         audioEngine.setOverdub(_overdub.value)
-        audioEngine.setClickEnabled(_click.value)
-        // El audio arranca primero (mide latencia) y el video después; el offset lo compensa.
+        audioEngine.setMetronome(config.metronomeInCountIn, config.metronomeWhileRecording)
+        // El audio arranca primero (mide latencia y hace la cuenta regresiva); el video,
+        // ~500 ms antes de que termine la cuenta. El offset medido compensa la diferencia.
         val audioStarted = withContext(Dispatchers.Default) {
             audioEngine.start(config, File(directory, AUDIO_FILE))
         }
         if (!audioStarted) {
+            directory.deleteRecursively()
             _state.value = SessionState.Error("No se pudo abrir el audio. ¿Otra app está usando el micrófono?")
             return@withLock
         }
-        videoRecorder.start(File(directory, VIDEO_FILE))
-        _state.value = SessionState.Recording(config, directory)
+        if (config.countInBeats > 0) {
+            _state.value = SessionState.CountingIn(config, directory)
+        } else {
+            startVideo(config, directory)
+        }
         startPolling()
     }
 
+    private fun startVideo(config: SessionConfig, directory: File) {
+        videoRecorder.start(File(directory, VIDEO_FILE))
+        _state.value = SessionState.Recording(config, directory)
+    }
+
     suspend fun stop(interruptedReason: String? = null) = mutex.withLock {
+        val countingIn = _state.value as? SessionState.CountingIn
+        if (countingIn != null) {
+            // Se canceló durante la cuenta regresiva: no hay nada que guardar.
+            pollJob?.cancel()
+            _audioStatus.value = null
+            withContext(Dispatchers.Default) { audioEngine.stop() }
+            countingIn.directory.deleteRecursively()
+            _state.value = SessionState.Idle
+            return@withLock
+        }
         val recording = _state.value as? SessionState.Recording ?: return@withLock
         pollJob?.cancel()
         val audio = audioEngine.status()
@@ -168,9 +196,9 @@ class SessionController @Inject constructor(
         audioEngine.setOverdub(enabled)
     }
 
-    fun setClickEnabled(enabled: Boolean) {
-        _click.value = enabled
-        audioEngine.setClickEnabled(enabled)
+    fun setMetronomeWhileRecording(enabled: Boolean) {
+        _metronomeWhileRecording.value = enabled
+        audioEngine.setMetronome(metronomeInCountIn, enabled)
     }
 
     fun undoLastLayer() = audioEngine.undoLastLayer()
@@ -185,6 +213,13 @@ class SessionController @Inject constructor(
                     stopAsync("Se desconectó el dispositivo de audio")
                     break
                 }
+                // CameraX tarda unos cientos de ms en arrancar: se inicia poco antes del final de la cuenta.
+                val countingIn = _state.value as? SessionState.CountingIn
+                if (countingIn != null && status != null &&
+                    (!status.isCountingIn || status.countInRemainingNanos <= VIDEO_LEAD_NANOS)
+                ) {
+                    startVideo(countingIn.config, countingIn.directory)
+                }
                 delay(POLL_INTERVAL_MS)
             }
         }
@@ -195,9 +230,15 @@ class SessionController @Inject constructor(
         return File(root, "sessions/${System.currentTimeMillis()}").apply { mkdirs() }
     }
 
-    private fun writeMetadata(result: SessionResult, config: LoopConfig, audio: AudioStatus?) {
+    private fun writeMetadata(result: SessionResult, config: SessionConfig, audio: AudioStatus?) {
         val lines = buildList {
+            add("lengthMode=${config.lengthMode}")
             add("loopSeconds=${config.loopSeconds}")
+            add("bpm=${config.effectiveBpm}")
+            add("beatsPerBar=${config.beatsPerBar}")
+            add("beatsPerLoop=${config.beatsPerLoop}")
+            add("countInBeats=${config.countInBeats}")
+            add("maxLayers=${config.effectiveMaxLayers}")
             add("layers=${result.layers}")
             add("audioOffsetNanos=${result.audioOffsetNanos ?: ""}")
             add("videoStartFrameAccurate=${result.videoStartFrameAccurate}")
@@ -217,6 +258,7 @@ class SessionController @Inject constructor(
         const val METADATA_FILE = "session.properties"
         const val EXPORT_FILE = "loopcam.mp4"
         const val VIDEO_FINALIZE_TIMEOUT_MS = 5_000L
-        const val POLL_INTERVAL_MS = 33L
+        const val POLL_INTERVAL_MS = 16L
+        const val VIDEO_LEAD_NANOS = 500_000_000L
     }
 }

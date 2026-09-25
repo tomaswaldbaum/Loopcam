@@ -13,7 +13,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import io.loopcam.app.R
 import io.loopcam.app.session.SessionController
 import io.loopcam.app.session.SessionState
-import io.loopcam.core.audio.LoopConfig
+import io.loopcam.app.settings.SessionSettingsRepository
 import javax.inject.Inject
 import kotlinx.coroutines.launch
 
@@ -23,14 +23,15 @@ class RecordingService : LifecycleService() {
 
     @Inject lateinit var sessionController: SessionController
 
+    @Inject lateinit var settingsRepository: SessionSettingsRepository
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_START -> {
                 goForeground()
-                val seconds = intent.getDoubleExtra(EXTRA_LOOP_SECONDS, DEFAULT_LOOP_SECONDS)
                 lifecycleScope.launch {
-                    sessionController.start(LoopConfig(seconds))
+                    sessionController.start(settingsRepository.current().config)
                     if (sessionController.state.value is SessionState.Error) stopSelfAndNotification()
                 }
             }
@@ -75,15 +76,11 @@ class RecordingService : LifecycleService() {
     companion object {
         private const val ACTION_START = "io.loopcam.action.START"
         private const val ACTION_STOP = "io.loopcam.action.STOP"
-        private const val EXTRA_LOOP_SECONDS = "loop_seconds"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
-        const val DEFAULT_LOOP_SECONDS = 4.0
-
-        fun start(context: Context, loopSeconds: Double) {
-            val intent = Intent(context, RecordingService::class.java)
-                .setAction(ACTION_START)
-                .putExtra(EXTRA_LOOP_SECONDS, loopSeconds)
+        /** Arranca una sesión con la configuración guardada en [SessionSettingsRepository]. */
+        fun start(context: Context) {
+            val intent = Intent(context, RecordingService::class.java).setAction(ACTION_START)
             context.startForegroundService(intent)
         }
 
